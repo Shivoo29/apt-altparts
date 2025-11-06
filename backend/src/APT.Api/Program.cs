@@ -7,6 +7,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddApplicationServices();
 builder.Services.AddScoped<ProblemReportService>();
+builder.Services.AddScoped<PartService>();
+builder.Services.AddScoped<ShortageService>();
+builder.Services.AddScoped<DeviationService>();
 
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.AllowAnyHeader().AllowAnyMethod().AllowCredentials().SetIsOriginAllowed(_ => true)));

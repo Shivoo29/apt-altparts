@@ -1,3 +1,4 @@
+
 // backend/workers/APT.IngestWorker/FileIngestService.cs
 using APT.Domain.Entities;
 using APT.Infrastructure;
@@ -13,69 +14,85 @@ public class FileIngestService : BackgroundService
     private readonly IServiceProvider _sp;
     private readonly ILogger<FileIngestService> _log;
     private readonly string _watchDir;
+    private readonly string _doneDir;
+    private readonly string _errDir;
 
     public FileIngestService(IServiceProvider sp, ILogger<FileIngestService> log, IConfiguration cfg)
     {
-        _sp = sp; _log = log;
+        _sp = sp;
+        _log = log;
         _watchDir = cfg.GetValue<string>("Ingest:WatchDir") ?? "/ingest";
+        _doneDir = Path.Combine(_watchDir, "done");
+        _errDir = Path.Combine(_watchDir, "err");
         Directory.CreateDirectory(_watchDir);
+        Directory.CreateDirectory(_doneDir);
+        Directory.CreateDirectory(_errDir);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _log.LogInformation("Watching {dir} for CSV files...", _watchDir);
+        _log.LogInformation("Watching {dir} for files...", _watchDir);
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            foreach (var file in Directory.GetFiles(_watchDir, "*.csv"))
+            foreach (var file in Directory.GetFiles(_watchDir, "*.*").Where(f => f.EndsWith(".csv") || f.EndsWith(".xlsx")))
             {
-                try { await IngestFileAsync(file, stoppingToken); File.Move(file, file + ".done", true); }
-                catch (Exception ex) { _log.LogError(ex, "Failed ingest {file}", file); File.Move(file, file + ".err", true); }
+                try
+                {
+                    await IngestFileAsync(file, stoppingToken);
+                    File.Move(file, Path.Combine(_doneDir, Path.GetFileName(file)), true);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "Failed ingest for {file}", file);
+                    File.Move(file, Path.Combine(_errDir, Path.GetFileName(file)), true);
+                }
             }
-            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
     }
 
     private async Task IngestFileAsync(string file, CancellationToken ct)
     {
+        _log.LogInformation("Ingesting {file}", file);
+        var records = Path.GetExtension(file).ToLowerInvariant() switch
+        {
+            ".csv" => ParseCsv(file),
+            ".xlsx" => throw new NotImplementedException("XLSX parsing not implemented"), // Placeholder for ClosedXML
+            _ => throw new InvalidOperationException($"Unsupported file type: {file}")
+        };
+
+        if (records.Count == 0) return;
+
         using var scope = _sp.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        _log.LogInformation("Ingesting {file}", file);
 
-        var config = new CsvConfiguration(CultureInfo.InvariantCulture) { TrimOptions = TrimOptions.Trim, DetectDelimiter = true };
-        using var reader = new StreamReader(file);
-        using var csv = new CsvReader(reader, config);
+        // Upsert logic
+        var partNumbers = records.Select(r => r.PartNumber).Distinct().ToList();
+        var existingParts = await db.Parts.Where(p => partNumbers.Contains(p.PartNumber)).ToDictionaryAsync(p => p.PartNumber, ct);
 
-        var records = csv.GetRecords<dynamic>().ToList();
-
-        foreach (var r in records)
+        foreach (var record in records)
         {
-            // Example expected columns: PartNumber, Description, Plant, ReasonCode, PR_SourceId, Status, Owner, OpenedDate
-            var dict = (IDictionary<string, object>)r;
-            string partNumber = dict["PartNumber"]?.ToString() ?? throw new("PartNumber required");
-
-            var part = await db.Parts.FirstOrDefaultAsync(p => p.PartNumber == partNumber, ct);
-            if (part is null)
+            if (!existingParts.TryGetValue(record.PartNumber, out var part))
             {
-                part = new Part { PartNumber = partNumber, Description = dict.TryGetValue("Description", out var d) ? d?.ToString() : null, Plant = dict.TryGetValue("Plant", out var pl) ? pl?.ToString() : null, IsAlternatePart = true };
+                part = new Part { PartNumber = record.PartNumber, Description = record.Description, Plant = record.Plant, IsAlternatePart = true };
                 db.Parts.Add(part);
-                await db.SaveChangesAsync(ct);
+                existingParts[part.PartNumber] = part; // Add to dictionary to be found by subsequent records in the same file
             }
 
-            if (dict.TryGetValue("PR_SourceId", out var srcObj) && srcObj is not null)
+            if (!string.IsNullOrEmpty(record.PR_SourceId))
             {
-                var src = srcObj.ToString();
-                var pr = await db.ProblemReports.FirstOrDefaultAsync(p => p.SourceSystemId == src, ct);
+                var pr = await db.ProblemReports.FirstOrDefaultAsync(p => p.SourceSystemId == record.PR_SourceId, ct);
                 if (pr is null)
                 {
                     pr = new ProblemReport
                     {
-                        PartId = part.Id,
-                        SourceSystemId = src,
-                        ReasonCode = dict.TryGetValue("ReasonCode", out var rc) ? rc?.ToString() ?? "ALT_PART" : "ALT_PART",
-                        Status = Enum.TryParse<PRStatus>(dict.TryGetValue("Status", out var st) ? st?.ToString() : "New", true, out var s) ? s : PRStatus.New,
-                        OwnerUpn = dict.TryGetValue("Owner", out var own) ? own?.ToString() : null,
-                        OpenedDate = DateTime.TryParse(dict.TryGetValue("OpenedDate", out var od) ? od?.ToString() : null, out var dt) ? dt : DateTime.UtcNow
+                        Part = part,
+                        SourceSystemId = record.PR_SourceId,
+                        ReasonCode = record.ReasonCode ?? "ALT_PART",
+                        Status = Enum.TryParse<PRStatus>(record.Status, true, out var s) ? s : PRStatus.New,
+                        OwnerUpn = record.Owner,
+                        OpenedDate = DateTime.TryParse(record.OpenedDate, out var dt) ? dt : DateTime.UtcNow
                     };
                     db.ProblemReports.Add(pr);
                 }
@@ -83,6 +100,26 @@ public class FileIngestService : BackgroundService
         }
 
         await db.SaveChangesAsync(ct);
-        _log.LogInformation("Ingest OK: {file}", file);
+        _log.LogInformation("Ingest successful for {file}", file);
     }
+
+    private List<IngestRecord> ParseCsv(string file)
+    {
+        var config = new CsvConfiguration(CultureInfo.InvariantCulture) { TrimOptions = TrimOptions.Trim, DetectDelimiter = true, MissingFieldFound = null };
+        using var reader = new StreamReader(file);
+        using var csv = new CsvReader(reader, config);
+        return csv.GetRecords<IngestRecord>().ToList();
+    }
+}
+
+public class IngestRecord
+{
+    public string PartNumber { get; set; } = default!;
+    public string? Description { get; set; }
+    public string? Plant { get; set; }
+    public string? ReasonCode { get; set; }
+    public string? PR_SourceId { get; set; }
+    public string? Status { get; set; }
+    public string? Owner { get; set; }
+    public string? OpenedDate { get; set; }
 }
