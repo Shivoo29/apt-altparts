@@ -1,0 +1,4 @@
+C:\Users\jhash\Documents\apt-altparts\backend\src\APT.Domain\obj\Debug\net9.0\APT.Domain.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\jhash\Documents\apt-altparts\backend\src\APT.Domain\obj\Debug\net9.0\APT.Domain.AssemblyInfoInputs.cache
+C:\Users\jhash\Documents\apt-altparts\backend\src\APT.Domain\obj\Debug\net9.0\APT.Domain.AssemblyInfo.cs
+C:\Users\jhash\Documents\apt-altparts\backend\src\APT.Domain\obj\Debug\net9.0\APT.Domain.csproj.CoreCompileInputs.cache
