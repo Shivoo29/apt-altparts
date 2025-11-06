@@ -1,19 +1,14 @@
-import { Outlet, NavLink } from 'react-router-dom'
 
-export default function Layout() {
-  return (
-    <div>
-      <header className="header">
-        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1>APT Alternate Parts</h1>
-          <nav style={{ display: 'flex', gap: 12 }}>
-            <NavLink to="/" end>PRs</NavLink>
-          </nav>
-        </div>
-      </header>
-      <main className="container" style={{ paddingTop: 16 }}>
-        <Outlet />
-      </main>
-    </div>
-  )
-}
+// frontend/apt-web/src/components/Layout.tsx
+import { Outlet } from 'react-router-dom';
+
+export const Layout = () => (
+    <>
+        <header className="app-header">
+            <h1>APT Alternate Parts Monitoring</h1>
+        </header>
+        <main className="container">
+            <Outlet />
+        </main>
+    </>
+);

@@ -1,30 +1,41 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from './client'
-import { ProblemReportListItemDto, ProblemReportDetailDto, PRStatus } from './types'
 
-export const usePRs = (params: { reasonCode?: string; status?: PRStatus; skip?: number; take?: number } = {}) =>
-  useQuery({
-    queryKey: ['prs', params],
-    queryFn: async () => {
-      const r = await api.get<ProblemReportListItemDto[]>('/prs', { params })
-      return r.data
-    }
-  })
+// frontend/apt-web/src/api/hooks.ts
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiClient } from './client';
+import { ProblemReportListItem, ProblemReportDetail, UpdateStatusRequest, PRStatus } from './types';
 
-export const usePR = (id: number) =>
-  useQuery({
-    queryKey: ['pr', id],
-    queryFn: async () => (await api.get<ProblemReportDetailDto>(`/prs/${id}`)).data
-  })
+export const usePRs = (reasonCode?: string, status?: PRStatus, skip = 0, take = 100) => {
+    return useQuery({
+        queryKey: ['problem-reports', { reasonCode, status, skip, take }],
+        queryFn: async () => {
+            const response = await apiClient.get<ProblemReportListItem[]>('/prs', {
+                params: { reasonCode, status, skip, take },
+            });
+            return response.data;
+        },
+    });
+};
+
+export const usePR = (id: number) => {
+    return useQuery({
+        queryKey: ['problem-report', id],
+        queryFn: async () => {
+            const response = await apiClient.get<ProblemReportDetail>(`/prs/${id}`);
+            return response.data;
+        },
+    });
+};
 
 export const useUpdatePRStatus = (id: number) => {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (body: { newStatus: PRStatus; comments?: string }) =>
-      (await api.patch(`/prs/${id}/status`, body)).data,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pr', id] })
-      qc.invalidateQueries({ queryKey: ['prs'] })
-    }
-  })
-}
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async (data: UpdateStatusRequest) => {
+            const response = await apiClient.patch(`/prs/${id}/status`, data);
+            return response.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['problem-report', id] });
+            queryClient.invalidateQueries({ queryKey: ['problem-reports'] });
+        },
+    });
+};

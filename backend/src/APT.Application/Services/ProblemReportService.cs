@@ -1,4 +1,8 @@
+
 // backend/src/APT.Application/Services/ProblemReportService.cs
+using AutoMapper;
+using AutoMapper.QueryableExtensions;
+using APT.Application.DTOs;
 using APT.Domain.Entities;
 using APT.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -8,37 +12,48 @@ namespace APT.Application.Services;
 public class ProblemReportService
 {
     private readonly AppDbContext _db;
+    private readonly IMapper _mapper;
 
-    public ProblemReportService(AppDbContext db) => _db = db;
-
-    public async Task<ProblemReport?> GetAsync(int id) =>
-        await _db.ProblemReports.Include(p => p.Part).Include(p => p.StatusHistory).FirstOrDefaultAsync(p => p.Id == id);
-
-    public async Task<List<ProblemReport>> ListAsync(string? reasonCode = null, PRStatus? status = null)
+    public ProblemReportService(AppDbContext db, IMapper mapper)
     {
-        var q = _db.ProblemReports.Include(p => p.Part).AsQueryable();
-        if (!string.IsNullOrWhiteSpace(reasonCode)) q = q.Where(p => p.ReasonCode == reasonCode);
-        if (status.HasValue) q = q.Where(p => p.Status == status.Value);
-        return await q.OrderByDescending(p => p.OpenedDate).Take(1000).ToListAsync();
+        _db = db;
+        _mapper = mapper;
     }
 
-    public async Task<bool> UpdateStatusAsync(int id, PRStatus newStatus, string changedByUpn, string? comments = null)
+    public async Task<ProblemReportDetailDto?> GetAsync(int id) =>
+        await _db.ProblemReports
+            .AsNoTracking()
+            .Where(p => p.Id == id)
+            .ProjectTo<ProblemReportDetailDto>(_mapper.ConfigurationProvider)
+            .FirstOrDefaultAsync();
+
+    public async Task<List<ProblemReportListItemDto>> ListAsync(string? reasonCode = null, PRStatus? status = null, int skip = 0, int take = 100)
+    {
+        var q = _db.ProblemReports.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(reasonCode)) q = q.Where(p => p.ReasonCode == reasonCode);
+        if (status.HasValue) q = q.Where(p => p.Status == status.Value);
+        return await q.OrderByDescending(p => p.OpenedDate)
+            .Skip(skip).Take(take)
+            .ProjectTo<ProblemReportListItemDto>(_mapper.ConfigurationProvider)
+            .ToListAsync();
+    }
+
+    public async Task<(bool success, string? error)> UpdateStatusAsync(int id, PRStatus newStatus, string changedByUpn, string? comments = null)
     {
         var pr = await _db.ProblemReports.FirstOrDefaultAsync(p => p.Id == id);
-        if (pr is null) return false;
+        if (pr is null) return (false, "Problem Report not found.");
 
-        // Basic transition rules
         var allowed = new Dictionary<PRStatus, PRStatus[]>
         {
-            [PRStatus.New] = new[] { PRStatus.InAnalysis },
-            [PRStatus.InAnalysis] = new[] { PRStatus.AwaitingDeviation, PRStatus.Approved },
-            [PRStatus.AwaitingDeviation] = new[] { PRStatus.Approved },
+            [PRStatus.New] = new[] { PRStatus.InAnalysis, PRStatus.Closed },
+            [PRStatus.InAnalysis] = new[] { PRStatus.AwaitingDeviation, PRStatus.Approved, PRStatus.Closed },
+            [PRStatus.AwaitingDeviation] = new[] { PRStatus.Approved, PRStatus.Closed },
             [PRStatus.Approved] = new[] { PRStatus.Implemented, PRStatus.Closed },
             [PRStatus.Implemented] = new[] { PRStatus.Closed }
         };
 
-        if (!allowed.TryGetValue(pr.Status, out var next) || !next.Contains(newStatus) && newStatus != pr.Status)
-            throw new InvalidOperationException($"Invalid transition {pr.Status} -> {newStatus}");
+        if (pr.Status != newStatus && (!allowed.TryGetValue(pr.Status, out var next) || !next.Contains(newStatus)))
+            return (false, $"Invalid status transition from {pr.Status} to {newStatus}.");
 
         var old = pr.Status;
         pr.Status = newStatus;
@@ -55,6 +70,6 @@ public class ProblemReportService
         });
 
         await _db.SaveChangesAsync();
-        return true;
+        return (true, null);
     }
 }

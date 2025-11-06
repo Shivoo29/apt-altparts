@@ -1,9 +1,11 @@
 // backend/src/APT.Api/Program.cs
+using APT.Application;
 using APT.Application.Services;
 using APT.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddApplicationServices();
 builder.Services.AddScoped<ProblemReportService>();
 
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>

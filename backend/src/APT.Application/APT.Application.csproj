@@ -1,6 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="AutoMapper.Extensions.Microsoft.DependencyInjection" Version="12.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\APT.Domain\APT.Domain.csproj" />
     <ProjectReference Include="..\APT.Infrastructure\APT.Infrastructure.csproj" />
   </ItemGroup>
